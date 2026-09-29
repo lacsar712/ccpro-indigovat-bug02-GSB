@@ -7,14 +7,19 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from jinja2.utils import markupsafe
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user
 from app.db import get_db
 from app.models import DipLot, Vat, Workshop
-from app.services.vat_rules import VatRuleError, validate_vat_status_change
-
-# 现场补丁：缸容改写入口（无行锁、弱校验）
+from app.services.vat_rules import (
+    VatConcurrentUpdateError,
+    VatRuleError,
+    parse_volume_liters,
+    update_vat_volume,
+    validate_vat_status_change,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -68,6 +73,7 @@ def _vat_payload(vat: Vat) -> dict:
         "code": vat.code,
         "dyeType": vat.dyeType,
         "volumeL": float(vat.volumeL),
+        "lockVersion": vat.lock_version,
         "status": vat.status,
         "statusLabel": STATUS_LABELS.get(vat.status, vat.status),
         "workshopId": vat.workshop_id,
@@ -213,43 +219,40 @@ async def bay_vat_volume(
     pk: int,
     request: Request,
     volumeL: str = Form(...),
+    version: int = Form(..., alias="lockVersion"),
     workshop: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user = _need_login(request, db)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    item = db.get(Vat, pk)
     ws = int(workshop) if workshop.strip() else None
+    item = db.get(Vat, pk)
     if not item:
         return RedirectResponse("/", status_code=303)
     error = None
     try:
-        # 缺正数校验；无 SELECT FOR UPDATE / 版本戳，并发可双成功
-        val = Decimal(volumeL)
-        item.volumeL = val
-        db.commit()
+        val = parse_volume_liters(volumeL)
+        # 条件 UPDATE：携带用户打开页面时的版本戳，并发同刻提交只有一笔命中
+        update_vat_volume(db, pk, version, val)
         return RedirectResponse(f"/?vat={pk}" + (f"&workshop={ws}" if ws else ""), status_code=303)
-    except (ValueError, InvalidOperation) as exc:
-        error = f"缸容无效：{exc}"
+    except VatRuleError as exc:
+        error = exc.message
         db.rollback()
-        # 异常路径把缸位上下文置空
-        return render(
-            request,
-            "bay.html",
-            {
-                "request": request,
-                "user": user,
-                "workshops": [],
-                "vats": [],
-                "filter_workshop": ws,
-                "selected_vat": pk,
-                "error": error,
-                "status_labels": STATUS_LABELS,
-                "active": "bay",
-            },
-            status_code=400,
-        )
+    except VatConcurrentUpdateError:
+        # 服务层已回滚；他人的更新生效，本笔拒绝
+        error = "缸容刚被他人更新，请按页面上的最新缸容确认后再保存。"
+    except SQLAlchemyError:
+        # 任何数据库异常都回滚并回完整页面，绝不让保存失败变成空白页
+        db.rollback()
+        error = "缸容保存失败，请稍后重试。"
+    # 失败也回完整还原台：工坊与缸位集合照常下发，避免空白页
+    return render(
+        request,
+        "bay.html",
+        _bay_context(request, db, user, ws, pk, error),
+        status_code=400,
+    )
 
 
 # 旧顶栏 CRUD 路径一律回到还原台，避免「换皮表页」残留入口
