@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -52,6 +53,10 @@ class Vat(Base):
     dyeType: Mapped[str] = mapped_column(String(80))
     volumeL: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     status: Mapped[str] = mapped_column(String(20), default=STATUS_IDLE)
+    # 乐观锁版本戳：并发改同一缸时只有一笔 UPDATE 能命中旧版本号
+    version_id: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
+
+    __mapper_args__ = {"version_id_col": version_id}
 
     workshop: Mapped["Workshop"] = relationship(back_populates="vats")
     lots: Mapped[list["DipLot"]] = relationship(back_populates="vat")

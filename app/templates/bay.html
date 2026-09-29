@@ -102,7 +102,7 @@
             <form method="post" :action="'/bay/vats/' + selected().id + '/volume'" style="margin-bottom:1rem">
               <input type="hidden" name="workshop" :value="filterWs || ''">
               <label>缸容 (L)
-                <input type="number" name="volumeL" step="0.01" required :value="selected().volumeL">
+                <input type="number" name="volumeL" step="0.01" min="0.01" required :value="selected().volumeL">
               </label>
               <button type="submit">保存缸容</button>
             </form>

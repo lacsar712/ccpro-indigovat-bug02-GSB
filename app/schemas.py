@@ -15,7 +15,7 @@ class VatIn(BaseModel):
     workshop_id: int
     code: str = Field(min_length=1, max_length=40)
     dyeType: str = Field(min_length=1, max_length=80)
-    volumeL: Decimal
+    volumeL: Decimal = Field(gt=0)
     status: str = "idle"
 
 

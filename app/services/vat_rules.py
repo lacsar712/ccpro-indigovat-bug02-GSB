@@ -12,6 +12,14 @@ class VatRuleError(Exception):
         super().__init__(message)
 
 
+def validate_volume(value: Decimal) -> Decimal:
+    """缸容必须是有限的正数（升）。拒绝 0、负数、NaN/Infinity。"""
+    volume = Decimal(value)
+    if volume.is_nan() or volume.is_infinite() or volume <= 0:
+        raise VatRuleError("缸容升数必须为正数。")
+    return volume
+
+
 def assert_can_mark_ready(latest: Optional[DipLot]) -> None:
     """不能将染缸标为 ready，除非最新浸染批次 redoxMv 已填且 <= -500。"""
     if latest is None or latest.redoxMv is None or Decimal(latest.redoxMv) > Decimal("-500"):
